@@ -1,0 +1,6 @@
+[package]
+name = "dumb_http_parser"
+version = "0.1.0"
+authors = ["hrishi <hrishikesh.mk1@gmail.com>"]
+
+[dependencies]
