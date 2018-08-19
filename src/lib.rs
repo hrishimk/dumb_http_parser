@@ -3,18 +3,29 @@ use std::str;
 #[derive(Debug)]
 pub struct HttpParser<'a> {
     buf: &'a [u8],
-    method: [usize; 2],
+    method: HttpMethod,
     src: [usize; 2],
     cookie: [usize; 2],
+    content_length: [usize; 2],
+    content_type: [usize; 2],
+}
+
+#[derive(Debug)]
+pub enum HttpMethod {
+    GET,
+    POST,
+    UNKNOWN,
 }
 
 impl<'a> HttpParser<'a> {
     pub fn new(buf: &'a [u8]) -> HttpParser<'a> {
         HttpParser {
             buf: buf,
-            method: [0, 0],
+            method: HttpMethod::UNKNOWN,
             src: [0, 0],
             cookie: [0, 0],
+            content_length: [0, 0],
+            content_type: [0, 0],
         }
     }
 
@@ -51,7 +62,13 @@ impl<'a> HttpParser<'a> {
                     if cur_line_first_space_set {
                         self.set_src([cur_line_first_space_pos + 1, i]);
                     } else {
-                        self.set_method([0, i]);
+                        match &self.buf[0..i] {
+                            b"GET" => self.set_method(HttpMethod::GET),
+                            b"POST" => self.set_method(HttpMethod::POST),
+                            _ => self.set_method(HttpMethod::UNKNOWN),
+                        }
+
+                        //self.set_method([0, i]);
                         cur_line_first_space_set = true;
                         cur_line_first_space_pos = i;
                     }
@@ -71,7 +88,16 @@ impl<'a> HttpParser<'a> {
                             == &self.buf[cur_line_last_header_key[0]..cur_line_last_header_key[1]]
                         {
                             self.set_cookie([cur_line_first_space_pos, i - 1]);
+                        } else if b"Content-Length:"
+                            == &self.buf[cur_line_last_header_key[0]..cur_line_last_header_key[1]]
+                        {
+                            self.set_content_length([cur_line_first_space_pos, i - 1]);
+                        } else if b"Content-Type:"
+                            == &self.buf[cur_line_last_header_key[0]..cur_line_last_header_key[1]]
+                        {
+                            self.set_content_type([cur_line_first_space_pos, i - 1]);
                         }
+
                         cur_line_last_was_r = true;
                     }
                 }
@@ -79,7 +105,7 @@ impl<'a> HttpParser<'a> {
         }
     }
 
-    pub fn set_method(&mut self, method: [usize; 2]) {
+    pub fn set_method(&mut self, method: HttpMethod) {
         self.method = method;
     }
 
@@ -91,8 +117,16 @@ impl<'a> HttpParser<'a> {
         self.cookie = method;
     }
 
-    pub fn get_method(&self) -> &str {
-        str::from_utf8(&self.buf[self.method[0]..self.method[1]]).unwrap()
+    pub fn set_content_length(&mut self, method: [usize; 2]) {
+        self.content_length = method;
+    }
+
+    pub fn set_content_type(&mut self, method: [usize; 2]) {
+        self.content_type = method;
+    }
+
+    pub fn get_method(&self) -> &HttpMethod {
+        &self.method
     }
 
     pub fn get_src(&self) -> &str {
@@ -101,6 +135,30 @@ impl<'a> HttpParser<'a> {
 
     pub fn get_cookie(&self) -> &str {
         str::from_utf8(&self.buf[self.cookie[0]..self.cookie[1]]).unwrap()
+    }
+
+    pub fn get_page(&self) -> &str {
+        let src = &self.buf[self.src[0]..self.src[1]];
+
+        for (i, n) in src.iter().enumerate() {
+            if *n == b'?' {
+                return str::from_utf8(&src[..i]).unwrap();
+            }
+        }
+
+        str::from_utf8(&self.buf[self.src[0]..self.src[1]]).unwrap()
+    }
+
+    pub fn get_params(&self) -> &str {
+        let src = &self.buf[self.src[0]..self.src[1]];
+
+        for (i, n) in src.iter().enumerate().rev() {
+            if *n == b'?' {
+                return str::from_utf8(&src[i + 1..]).unwrap();
+            }
+        }
+
+        str::from_utf8(&self.buf[self.src[0]..self.src[1]]).unwrap()
     }
 }
 
