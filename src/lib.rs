@@ -167,14 +167,9 @@ impl<'a> HttpParser<'a> {
 
         let mut params: HashMap<&str, &str> = HashMap::new();
 
-        println!("src is {:#?}", src);
-
         let params_str = self.get_params().split('&');
 
-        println!("params_str is {:?}", params_str);
-
         for pair in params_str {
-            println!("\n\n{:#?}\n\n", pair);
 
             let key_val: Vec<&str> = pair.split('=').collect();
 
