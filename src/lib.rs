@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str;
 
 #[derive(Debug)]
@@ -160,12 +161,58 @@ impl<'a> HttpParser<'a> {
 
         str::from_utf8(&self.buf[self.src[0]..self.src[1]]).unwrap()
     }
+
+    pub fn get_params_map(&self) -> HashMap<&str, &str> {
+        let src = &self.buf[self.src[0]..self.src[1]];
+
+        let mut params: HashMap<&str, &str> = HashMap::new();
+
+        println!("src is {:#?}", src);
+
+        let params_str = self.get_params().split('&');
+
+        println!("params_str is {:?}", params_str);
+
+        for pair in params_str {
+            println!("\n\n{:#?}\n\n", pair);
+
+            let key_val: Vec<&str> = pair.split('=').collect();
+
+            let key = key_val.get(0).unwrap_or(&"");
+            let val = key_val.get(1).unwrap_or(&"");
+
+            params.insert(key, val);
+        }
+
+        params
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    use super::*;
+
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn get_str_params_works() {
+        let a = b"GET /get?type=dbs&active=1 HTTP/1.1\r\n\r\n";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+        let gparams = parser.get_params();
+
+        println!("method is {:?}", parser.get_method());
+
+        assert_eq!("type=dbs&active=1", gparams);
+    }
+
+    #[test]
+    fn params_to_hashmap_works() {
+        let a = b"GET /get?type=dbs&active=1 HTTP/1.1\r\n\r\n";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+        let mut test_map = HashMap::new();
+        test_map.insert("type", "dbs");
+        test_map.insert("active", "1");
+        assert_eq!(test_map, parser.get_params_map());
     }
 }
