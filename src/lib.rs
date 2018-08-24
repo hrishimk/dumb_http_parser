@@ -9,6 +9,7 @@ pub struct HttpParser<'a> {
     cookie: [usize; 2],
     content_length: [usize; 2],
     content_type: [usize; 2],
+    body: [usize; 2],
 }
 
 #[derive(Debug)]
@@ -27,12 +28,14 @@ impl<'a> HttpParser<'a> {
             cookie: [0, 0],
             content_length: [0, 0],
             content_type: [0, 0],
+            body: [0, 0],
         }
     }
 
     pub fn parse(&mut self) {
         let mut cur_pos = 0;
 
+        let mut cur_line_start = false;
         let mut cur_line = 0;
         let mut cur_line_start_pos = 0;
         let mut cur_line_key_set = false;
@@ -47,7 +50,20 @@ impl<'a> HttpParser<'a> {
         for (i, n) in biterator.enumerate() {
             cur_pos = i;
 
+            if cur_line_start {
+                if *n == b'\r' {
+                    let len = self.buf.len();
+                    if (i + 2 > len - 1) {
+                        self.set_body([0, 0]);
+                    } else {
+                        self.set_body([i + 2, len]);
+                    }
+                    break;
+                }
+            }
+
             if cur_line_last_was_r {
+                cur_line_start = true;
                 cur_line += 1;
                 cur_line_start_pos = i + 1;
                 cur_line_key_set = false;
@@ -56,6 +72,8 @@ impl<'a> HttpParser<'a> {
                 cur_line_last_was_r = false;
                 cur_line_last_header_key = [0, 0];
                 continue;
+            } else {
+                cur_line_start = false;
             }
 
             if cur_line == 0 {
@@ -126,6 +144,10 @@ impl<'a> HttpParser<'a> {
         self.content_type = method;
     }
 
+    pub fn set_body(&mut self, method: [usize; 2]) {
+        self.body = method;
+    }
+
     pub fn get_method(&self) -> &HttpMethod {
         &self.method
     }
@@ -136,6 +158,10 @@ impl<'a> HttpParser<'a> {
 
     pub fn get_cookie(&self) -> &str {
         str::from_utf8(&self.buf[self.cookie[0]..self.cookie[1]]).unwrap()
+    }
+
+    pub fn get_body(&self) -> &str {
+        str::from_utf8(&self.buf[self.body[0]..self.body[1]]).unwrap()
     }
 
     pub fn get_page(&self) -> &str {
@@ -162,15 +188,17 @@ impl<'a> HttpParser<'a> {
         str::from_utf8(&self.buf[self.src[0]..self.src[1]]).unwrap()
     }
 
-    pub fn get_params_map(&self) -> HashMap<&str, &str> {
-        let src = &self.buf[self.src[0]..self.src[1]];
-
+    pub fn get_map(&self, nature: &str, splitter: &str) -> HashMap<&str, &str> {
         let mut params: HashMap<&str, &str> = HashMap::new();
 
-        let params_str = self.get_params().split('&');
+        let params_str;
 
+        if nature == "params" {
+            params_str = self.get_params().split(splitter);
+        } else {
+            params_str = self.get_cookie().split(splitter);
+        }
         for pair in params_str {
-
             let key_val: Vec<&str> = pair.split('=').collect();
 
             let key = key_val.get(0).unwrap_or(&"");
@@ -180,6 +208,14 @@ impl<'a> HttpParser<'a> {
         }
 
         params
+    }
+
+    pub fn get_params_map(&self) -> HashMap<&str, &str> {
+        self.get_map("params", "&")
+    }
+
+    pub fn get_cookie_map(&self) -> HashMap<&str, &str> {
+        self.get_map("cookies", "; ")
     }
 }
 
@@ -198,6 +234,16 @@ mod tests {
         println!("method is {:?}", parser.get_method());
 
         assert_eq!("type=dbs&active=1", gparams);
+    }
+
+    #[test]
+    fn get_str_body_works() {
+        let a = b"GET /get?type=dbs&active=1 HTTP/1.1\r\n\r\nHelloIamTheBody";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+        let gparams = parser.get_body();
+
+        assert_eq!("HelloIamTheBody", gparams);
     }
 
     #[test]
