@@ -210,7 +210,6 @@ impl<'a> HttpParser<'a> {
         } else if nature == "cookies" {
             params_str = self.get_cookie().split(splitter);
         } else {
-            println!("body is {:?}", self.get_body());
             params_str = self.get_body().split(splitter);
         }
         for pair in params_str {
@@ -278,8 +277,6 @@ impl<'a> HttpParser<'a> {
             if cur_line_start {
                 if *n == b'\r' {
                     let len = buf.len();
-                    println!("i+2 is {}", i + 2);
-                    println!("len is {}", len);
                     if (i + 2 > len - 1) {
                         body_len = 0;
                     } else {
