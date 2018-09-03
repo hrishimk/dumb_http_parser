@@ -1,3 +1,5 @@
+extern crate url;
+
 use std::collections::HashMap;
 use std::str;
 
@@ -200,6 +202,18 @@ impl<'a> HttpParser<'a> {
         str::from_utf8(&self.buf[self.src[0]..self.src[1]]).unwrap()
     }
 
+    pub fn get_params_index(&self) -> (usize, usize) {
+        let src = &self.buf[self.src[0]..self.src[1]];
+
+        for (i, n) in src.iter().enumerate().rev() {
+            if *n == b'?' {
+                return (self.src[0] + i + 1, self.src[1]);
+            }
+        }
+
+        (0, 0)
+    }
+
     pub fn get_map(&self, nature: &str, splitter: &str) -> HashMap<&str, &str> {
         let mut params: HashMap<&str, &str> = HashMap::new();
 
@@ -224,8 +238,16 @@ impl<'a> HttpParser<'a> {
         params
     }
 
-    pub fn get_params_map(&self) -> HashMap<&str, &str> {
-        self.get_map("params", "&")
+    pub fn get_params_map(&self) -> HashMap<String, String> {
+        let (i1, i2) = self.get_params_index();
+        let a = url::form_urlencoded::parse(&self.buf[i1..i2]);
+
+        let mut map: HashMap<String, String> = HashMap::new();
+
+        for (key, value) in a.into_owned() {
+            map.insert(key, value);
+        }
+        map
     }
 
     pub fn get_body_map(&self) -> HashMap<&str, &str> {
@@ -378,8 +400,8 @@ mod tests {
         let mut parser = HttpParser::new(a);
         parser.parse();
         let mut test_map = HashMap::new();
-        test_map.insert("type", "dbs");
-        test_map.insert("active", "1");
+        test_map.insert("type".to_string(), "dbs".to_string());
+        test_map.insert("active".to_string(), "1".to_string());
         assert_eq!(test_map, parser.get_params_map());
     }
 
