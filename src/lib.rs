@@ -10,7 +10,7 @@ pub struct HttpParser<'a> {
     src: [usize; 2],
     cookie: [usize; 2],
     content_length: [usize; 2],
-    content_type: [usize; 2],
+    content_type: ContentType,
     body: [usize; 2],
 }
 
@@ -21,6 +21,23 @@ pub enum HttpMethod {
     UNKNOWN,
 }
 
+#[derive(Debug)]
+struct ContentType {
+    media_type: [usize; 2],
+    charset: [usize; 2],
+    boundary: [usize; 2],
+}
+
+impl ContentType {
+    fn empty() -> Self {
+        Self {
+            media_type: [0, 0],
+            charset: [0, 0],
+            boundary: [0, 0],
+        }
+    }
+}
+
 impl<'a> HttpParser<'a> {
     pub fn new(buf: &'a [u8]) -> HttpParser<'a> {
         HttpParser {
@@ -29,18 +46,16 @@ impl<'a> HttpParser<'a> {
             src: [0, 0],
             cookie: [0, 0],
             content_length: [0, 0],
-            content_type: [0, 0],
+            content_type: ContentType::empty(),
             body: [0, 0],
         }
     }
 
     pub fn parse(&mut self) {
-        let mut cur_pos = 0;
-
         let mut cur_line_start = false;
         let mut cur_line = 0;
         let mut cur_line_start_pos = 0;
-        let mut cur_line_key_set = false;
+        //let mut cur_line_key_set = false;
         let mut cur_line_first_space_set = false;
         let mut cur_line_first_space_pos = 0;
         let mut cur_line_last_was_r = false;
@@ -50,12 +65,10 @@ impl<'a> HttpParser<'a> {
         let biterator = self.buf.iter();
 
         for (i, n) in biterator.enumerate() {
-            cur_pos = i;
-
             if cur_line_start {
                 if *n == b'\r' {
                     let len = self.buf.len();
-                    if (i + 2 > len - 1) {
+                    if i + 2 > len - 1 {
                         self.set_body([0, 0]);
                     } else {
                         self.set_body([i + 2, len]);
@@ -68,7 +81,7 @@ impl<'a> HttpParser<'a> {
                 cur_line_start = true;
                 cur_line += 1;
                 cur_line_start_pos = i + 1;
-                cur_line_key_set = false;
+                //cur_line_key_set = false;
                 cur_line_first_space_set = false;
                 cur_line_first_space_pos = i;
                 cur_line_last_was_r = false;
@@ -115,7 +128,6 @@ impl<'a> HttpParser<'a> {
                         };
 
                         let key = key.as_str();
-
                         if "cookie" == key {
                             self.set_cookie([cur_line_first_space_pos + 1, i]);
                         } else if "content-length" == key {
@@ -147,8 +159,55 @@ impl<'a> HttpParser<'a> {
         self.content_length = method;
     }
 
+    fn split(&mut self, data: [usize; 2], splitter: u8) -> Vec<[usize; 2]> {
+        let mut points: Vec<u8> = vec![];
+        let mut chunks: Vec<[usize; 2]> = vec![];
+        for i in data[0]..data[1] {
+            let d = self.buf[i];
+            if d == splitter {
+                points.push(i as u8);
+            }
+        }
+
+        let mut start = data[0];
+        let end = data[1];
+        for point in points {
+            chunks.push([start, point as usize]);
+            start = point as usize + 1;
+        }
+
+        chunks.push([start, end]);
+
+        chunks
+    }
+
     pub fn set_content_type(&mut self, method: [usize; 2]) {
-        self.content_type = method;
+        let items = self.split(method, b';');
+
+        for (i, item) in items.iter().enumerate() {
+            if i == 0 {
+                self.content_type.media_type = *item;
+                continue;
+            }
+
+            let splitted = self.split([item[0], item[1]], b'=');
+            if splitted.len() < 2 {
+                continue;
+            }
+
+            let key = str::from_utf8(&self.buf[item[0]..splitted[0][1]]);
+
+            let key = match key {
+                Ok(x) => x.trim().to_lowercase(),
+                Err(_) => "".to_string(),
+            };
+
+            if key == "charset" {
+                self.content_type.charset = [splitted[1][0], item[1]];
+            } else if key == "boundary" {
+                self.content_type.boundary = [splitted[1][0], item[1]];
+            }
+        }
     }
 
     pub fn set_body(&mut self, method: [usize; 2]) {
@@ -164,6 +223,21 @@ impl<'a> HttpParser<'a> {
             .unwrap_or("0")
             .parse::<usize>()
             .unwrap_or(0)
+    }
+
+    pub fn get_content_type(&self) -> &str {
+        str::from_utf8(&self.buf[self.content_type.media_type[0]..self.content_type.media_type[1]])
+            .unwrap()
+    }
+
+    pub fn get_charset(&self) -> &str {
+        str::from_utf8(&self.buf[self.content_type.charset[0]..self.content_type.charset[1]])
+            .unwrap()
+    }
+
+    pub fn get_multipart_boundary(&self) -> &str {
+        str::from_utf8(&self.buf[self.content_type.boundary[0]..self.content_type.boundary[1]])
+            .unwrap()
     }
 
     pub fn get_src(&self) -> &str {
@@ -210,13 +284,11 @@ impl<'a> HttpParser<'a> {
                 return (self.src[0] + i + 1, self.src[1]);
             }
         }
-
         (0, 0)
     }
 
     pub fn get_map(&self, nature: &str, splitter: &str) -> HashMap<&str, &str> {
         let mut params: HashMap<&str, &str> = HashMap::new();
-
         let params_str;
 
         if nature == "params" {
@@ -273,16 +345,10 @@ impl<'a> HttpParser<'a> {
     pub fn check_data(buf: &[u8]) -> usize {
         let iter = buf.iter();
 
-        let mut end_checker: [u8; 4];
-
-        let end = 0;
-
-        let mut cur_pos = 0;
-
         let mut cur_line_start = false;
         let mut cur_line = 0;
         let mut cur_line_start_pos = 0;
-        let mut cur_line_key_set = false;
+        //let mut cur_line_key_set = false;
         let mut cur_line_first_space_set = false;
         let mut cur_line_first_space_pos = 0;
         let mut cur_line_last_was_r = false;
@@ -291,19 +357,16 @@ impl<'a> HttpParser<'a> {
 
         let mut content_len = 0;
         let mut body_len = 0;
-        let mut body_begin = 0;
+        //let mut body_begin = 0;
 
         for (i, n) in iter.enumerate() {
-            cur_pos = i;
-
             if cur_line_start {
                 if *n == b'\r' {
                     let len = buf.len();
-                    if (i + 2 > len - 1) {
+                    if i + 2 > len - 1 {
                         body_len = 0;
                     } else {
                         body_len = len - i - 2;
-                        body_begin = i + 2;
                     }
                     break;
                 }
@@ -313,7 +376,7 @@ impl<'a> HttpParser<'a> {
                 cur_line_start = true;
                 cur_line += 1;
                 cur_line_start_pos = i + 1;
-                cur_line_key_set = false;
+                //cur_line_key_set = false;
                 cur_line_first_space_set = false;
                 cur_line_first_space_pos = i;
                 cur_line_last_was_r = false;
@@ -342,7 +405,6 @@ impl<'a> HttpParser<'a> {
                         let key = key.as_str();
 
                         if "content-length" == key {
-                            //content_len([cur_line_first_space_pos + 1, i]);
                             content_len = str::from_utf8(&buf[cur_line_first_space_pos + 1..i])
                                 .unwrap_or("0")
                                 .parse::<usize>()
@@ -353,15 +415,12 @@ impl<'a> HttpParser<'a> {
                     }
                 }
             } else {
-                //println!("line is zero");
                 //Check first line
                 if *n == b'\r' {
                     cur_line_last_was_r = true;
                 }
             }
         }
-
-        //println!("body_len is {}", body_len);
 
         content_len - body_len
     }
@@ -378,8 +437,6 @@ mod tests {
         let mut parser = HttpParser::new(a);
         parser.parse();
         let gparams = parser.get_params();
-
-        println!("method is {:?}", parser.get_method());
 
         assert_eq!("type=dbs&active=1", gparams);
     }
@@ -411,7 +468,6 @@ mod tests {
         let mut parser = HttpParser::new(a);
         parser.parse();
 
-        println!("parser is {:#?}", parser);
         assert_eq!(100, parser.get_content_length());
     }
     #[test]
@@ -426,6 +482,39 @@ mod tests {
         let a = b"GET /get?type=dbs&active=1 HTTP/1.1\r\nContent-Length: 6\r\n\r\nabcdef";
 
         assert_eq!(HttpParser::check_data(a), 0);
+    }
+
+    #[test]
+    fn read_content_type() {
+        let a = b"POST /get?type=dbs&active=1 HTTP/1.1\r\nContent-Length: 6\r\nContent-Type: text/html; charset=utf-8\r\n\r\nabcdef";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+
+        assert_eq!(parser.get_content_type(), "text/html");
+    }
+
+    #[test]
+    fn read_charset() {
+        let a = b"POST /get?type=dbs&active=1 HTTP/1.1\r\nContent-Length: 6\r\nContent-Type: text/html; charset=utf-8\r\n\r\nabcdef";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+        assert_eq!(parser.get_charset(), "utf-8");
+    }
+
+    #[test]
+    fn read_charset_multiple() {
+        let a = b"POST /get?type=dbs&active=1 HTTP/1.1\r\nContent-Type: text/html; charset=utf-8; boundary=something\r\nContent-Length: 6\r\n\r\nabcdef";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+        assert_eq!(parser.get_charset(), "utf-8");
+    }
+
+    #[test]
+    fn read_multipart_boundary() {
+        let a = b"POST /get?type=dbs&active=1 HTTP/1.1\r\nContent-Length: 6\r\nContent-Type: text/html; charset=utf-8; boundary=something\r\n\r\nabcdef";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+        assert_eq!(parser.get_multipart_boundary(), "something");
     }
 
 }
