@@ -2,6 +2,8 @@
 name = "dumb_http_parser"
 version = "0.1.1"
 authors = ["hrishi <hrishikesh.mk1@gmail.com>"]
+description = "Parse HTTP request"
+license = "MIT"
 
 [dependencies]
 url="1.7.2"
