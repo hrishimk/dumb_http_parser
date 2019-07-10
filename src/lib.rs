@@ -40,6 +40,7 @@ impl ContentType {
 
 impl<'a> HttpParser<'a> {
     pub fn new(buf: &'a [u8]) -> HttpParser<'a> {
+        //println!("{}", s);
         HttpParser {
             buf: buf,
             method: HttpMethod::UNKNOWN,
@@ -160,20 +161,21 @@ impl<'a> HttpParser<'a> {
     }
 
     fn split(&mut self, data: [usize; 2], splitter: u8) -> Vec<[usize; 2]> {
-        let mut points: Vec<u8> = vec![];
+        let mut points: Vec<usize> = vec![];
         let mut chunks: Vec<[usize; 2]> = vec![];
+
         for i in data[0]..data[1] {
             let d = self.buf[i];
             if d == splitter {
-                points.push(i as u8);
+                points.push(i);
             }
         }
 
         let mut start = data[0];
         let end = data[1];
         for point in points {
-            chunks.push([start, point as usize]);
-            start = point as usize + 1;
+            chunks.push([start, point]);
+            start = point + 1;
         }
 
         chunks.push([start, end]);
@@ -310,6 +312,30 @@ impl<'a> HttpParser<'a> {
         params
     }
 
+    pub fn get_post_params<'b>(&self) -> HashMap<String, String>
+    where
+        'a: 'b,
+    {
+        let ctype = self.get_content_type();
+        if ctype.trim().to_lowercase() == "application/x-www-form-urlencoded" {
+            return self.get_post_params_url_encoded();
+        }
+
+        self.get_body_map()
+    }
+
+    pub fn get_post_params_url_encoded(&self) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+
+        let body = &self.buf[self.body[0]..self.body[1]];
+        let a = url::form_urlencoded::parse(body);
+        for (key, value) in a.into_owned() {
+            params.insert(key, value);
+        }
+
+        params
+    }
+
     pub fn get_params_map(&self) -> HashMap<String, String> {
         let (i1, i2) = self.get_params_index();
         let a = url::form_urlencoded::parse(&self.buf[i1..i2]);
@@ -322,8 +348,20 @@ impl<'a> HttpParser<'a> {
         map
     }
 
-    pub fn get_body_map(&self) -> HashMap<&str, &str> {
-        self.get_map("body", "&")
+    pub fn get_body_map(&self) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+
+        let params_str = self.get_body().split('&');
+
+        for pair in params_str {
+            let key_val: Vec<&str> = pair.split('=').collect();
+
+            let key = key_val.get(0).unwrap_or(&"").to_string();
+            let val = key_val.get(1).unwrap_or(&"").to_string();
+
+            params.insert(key, val);
+        }
+        params
     }
 
     pub fn get_cookie_map(&self) -> HashMap<&str, &str> {
@@ -515,6 +553,45 @@ mod tests {
         let mut parser = HttpParser::new(a);
         parser.parse();
         assert_eq!(parser.get_multipart_boundary(), "something");
+    }
+
+    #[test]
+    fn post_url_encoded() {
+        let a = b"POST /get?type=dbs&active=1 HTTP/1.1\r\nContent-Length: 6\r\nContent-Type: application/x-www-form-urlencoded; charset=utf-8; boundary=something\r\n\r\nkey1=20%25&key2=10+%2B+10&key3=data3";
+
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+
+        let mut params = HashMap::new();
+
+        params.insert("key1".to_string(), "20%".to_string());
+        params.insert("key2".to_string(), "10 + 10".to_string());
+        params.insert("key3".to_string(), "data3".to_string());
+
+        let sparams = parser.get_post_params();
+
+        println!("{:#?}", sparams);
+
+        assert_eq!(params, sparams);
+    }
+
+    #[test]
+    fn post_url_encoded_without_header() {
+        let a = b"POST /get?type=dbs&active=1 HTTP/1.1\r\nContent-Length: 6\r\nContent-Type: text/html; charset=utf-8; boundary=something\r\n\r\nkey1=20%&key2=10 + 10&key3=data3";
+        let mut parser = HttpParser::new(a);
+        parser.parse();
+
+        let mut params = HashMap::new();
+
+        params.insert("key1".to_string(), "20%".to_string());
+        params.insert("key2".to_string(), "10 + 10".to_string());
+        params.insert("key3".to_string(), "data3".to_string());
+
+        let sparams = parser.get_post_params();
+
+        println!("{:#?}", sparams);
+
+        assert_eq!(params, sparams);
     }
 
 }
